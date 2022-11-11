@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"os"
 	"strings"
 	"time"
 
@@ -14,11 +13,9 @@ import (
 
 	"flashcat.cloud/categraf/config"
 	"flashcat.cloud/categraf/inputs"
-	"flashcat.cloud/categraf/inputs/mtail/internal/metrics"
-	"flashcat.cloud/categraf/inputs/mtail/internal/mtail"
-	"flashcat.cloud/categraf/inputs/mtail/internal/waker"
 	"flashcat.cloud/categraf/pkg/prom"
 	"flashcat.cloud/categraf/types"
+	"github.com/google/mtail/pkg/mtail"
 )
 
 const inputName = `mtail`
@@ -33,20 +30,19 @@ type MTail struct {
 type Instance struct {
 	config.InstanceConfig
 
-	NamePrefix           string        `toml:"name_prefix"`
-	Progs                string        `toml:"progs"`
-	Logs                 []string      `toml:"logs"`
-	IgnoreFileRegPattern string        `toml:"ignore_filename_regex_pattern"`
-	OverrideTimeZone     string        `toml:"override_timezone"`
-	EmitProgLabel        string        `toml:"emit_prog_label"`
-	emitProgLabel        bool          `toml:"emit_prog_label"`
-	EmitMetricTimestamp  string        `toml:"emit_metric_timestamp"`
-	emitMetricTimestamp  bool          `toml:"emit_metric_timestamp"`
-	PollInterval         time.Duration `toml:"poll_interval"`
-	PollLogInterval      time.Duration `toml:"poll_log_interval"`
-	MetricPushInterval   time.Duration `toml:"metric_push_interval"`
-	MaxRegexpLen         int           `toml:"max_regexp_length"`
-	MaxRecursionDepth    int           `toml:"max_recursion_depth"`
+	NamePrefix           string   `toml:"name_prefix"`
+	Progs                string   `toml:"progs"`
+	Logs                 []string `toml:"logs"`
+	IgnoreFileRegPattern string   `toml:"ignore_filename_regex_pattern"`
+	OverrideTimeZone     string   `toml:"override_timezone"`
+	EmitProgLabel        string   `toml:"emit_prog_label"`
+	EmitMetricTimestamp  string   `toml:"emit_metric_timestamp"`
+
+	PollInterval       time.Duration `toml:"poll_interval"`
+	PollLogInterval    time.Duration `toml:"poll_log_interval"`
+	MetricPushInterval time.Duration `toml:"metric_push_interval"`
+	MaxRegexpLen       int           `toml:"max_regexp_length"`
+	MaxRecursionDepth  int           `toml:"max_recursion_depth"`
 
 	SyslogUseCurrentYear string `toml:"syslog_use_current_year"` // true
 	sysLogUseCurrentYear bool   `toml:"-"`
@@ -55,7 +51,7 @@ type Instance struct {
 	//
 	ctx    context.Context    `toml:"-"`
 	cancel context.CancelFunc `toml:"-"`
-	m      *mtail.Server
+	m      *prometheus.Registry
 }
 
 func (ins *Instance) Init() error {
@@ -64,84 +60,51 @@ func (ins *Instance) Init() error {
 		return types.ErrInstancesEmpty
 	}
 
+	opt := mtail.Option{}
+	opt.Logs = ins.Logs
+	opt.Progs = ins.Progs
+	opt.NamePrefix = ins.NamePrefix
+	opt.IgnoreFileRegPattern = ins.IgnoreFileRegPattern
+	opt.OverrideTimeZone = ins.OverrideTimeZone
+	opt.Version = config.Version
+
 	// set default value
 	if ins.SyslogUseCurrentYear != "false" {
-		ins.sysLogUseCurrentYear = true
+		opt.SyslogUseCurrentYear = true
 	}
 	if ins.LogRuntimeErrors != "false" {
-		ins.logRuntimeErrors = true
+		opt.LogRuntimeErrors = true
 	}
 	if ins.EmitProgLabel != "false" {
-		ins.emitProgLabel = true
+		opt.OmitProgLabel = true
 	}
 	if ins.PollLogInterval == 0 {
-		ins.PollLogInterval = 250 * time.Millisecond
+		opt.PollLogInterval = 250 * time.Millisecond
 	}
 	if ins.PollInterval == 0 {
-		ins.PollInterval = 250 * time.Millisecond
+		opt.PollInterval = 250 * time.Millisecond
 	}
 	if ins.MetricPushInterval == 0 {
-		ins.MetricPushInterval = 1 * time.Minute
+		opt.MetricPushInterval = 1 * time.Minute
 	}
 	if ins.MaxRegexpLen == 0 {
-		ins.MaxRegexpLen = 1024
+		opt.MaxRegexpLen = 1024
 	}
 	if ins.MaxRecursionDepth == 0 {
-		ins.MaxRecursionDepth = 100
-	}
-	buildInfo := mtail.BuildInfo{
-		Version: config.Version,
-	}
-	loc, err := time.LoadLocation(ins.OverrideTimeZone)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Couldn't parse timezone %q: %s", ins.OverrideTimeZone, err)
-		return err
-	}
-
-	opts := []mtail.Option{
-		mtail.ProgramPath(ins.Progs),
-		mtail.LogPathPatterns(ins.Logs...),
-		mtail.IgnoreRegexPattern(ins.IgnoreFileRegPattern),
-		mtail.SetBuildInfo(buildInfo),
-		mtail.OverrideLocation(loc),
-		mtail.MetricPushInterval(ins.MetricPushInterval), // keep it here ?
-		mtail.MaxRegexpLength(ins.MaxRegexpLen),
-		mtail.MaxRecursionDepth(ins.MaxRecursionDepth),
-		mtail.LogRuntimeErrors,
+		opt.MaxRecursionDepth = 100
 	}
 	if ins.cancel != nil {
 		ins.cancel()
 	} else {
 		ins.ctx, ins.cancel = context.WithCancel(context.Background())
 	}
-	staleLogGcWaker := waker.NewTimed(ins.ctx, time.Hour)
-	opts = append(opts, mtail.StaleLogGcWaker(staleLogGcWaker))
-
-	if ins.PollInterval > 0 {
-		logStreamPollWaker := waker.NewTimed(ins.ctx, ins.PollInterval)
-		logPatternPollWaker := waker.NewTimed(ins.ctx, ins.PollLogInterval)
-		opts = append(opts, mtail.LogPatternPollWaker(logPatternPollWaker), mtail.LogstreamPollWaker(logStreamPollWaker))
-	}
-	if ins.sysLogUseCurrentYear {
-		opts = append(opts, mtail.SyslogUseCurrentYear)
-	}
-	if ins.emitProgLabel {
-		opts = append(opts, mtail.OmitProgLabel)
-	}
-	if ins.emitMetricTimestamp {
-		opts = append(opts, mtail.EmitMetricTimestamp)
-	}
-
-	store := metrics.NewStore()
-	store.StartGcLoop(ins.ctx, time.Hour)
-
-	m, err := mtail.New(ins.ctx, store, opts...)
+	registry, err := mtail.GetRegistry(ins.ctx, opt)
 	if err != nil {
 		log.Println(err)
 		ins.cancel()
 		return err
 	}
-	ins.m = m
+	ins.m = registry
 
 	return nil
 }
@@ -174,7 +137,7 @@ func (s *MTail) Description() string {
 // and returned at the end.
 // func (s *Instance) Gather(acc telegraf.Accumulator) error {
 func (ins *Instance) Gather(slist *types.SampleList) {
-	reg := ins.m.GetRegistry()
+	reg := ins.m
 	mfs, done, err := prometheus.ToTransactionalGatherer(reg).Gather()
 	if err != nil {
 		log.Println(err)

@@ -1,5 +1,7 @@
-#[[instances]]
+# # collect interval
+# interval = 15
 
+[[instances]]
 ## List of repositories to monitor.
 #repositories = [
 #    "flashcatcloud/categraf",

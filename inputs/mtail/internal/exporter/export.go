@@ -8,7 +8,6 @@ package exporter
 import (
 	"context"
 	"expvar"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -25,7 +24,7 @@ import (
 
 // Commandline Flags.
 var (
-	writeDeadline = flag.Duration("metric_push_write_deadline", 10*time.Second, "Time to wait for a push to succeed before exiting with an error.")
+	writeDeadline = new(time.Duration) // flag.Duration("metric_push_write_deadline", 10*time.Second, "Time to wait for a push to succeed before exiting with an error.")
 )
 
 // Exporter manages the export of metrics to passive and active collectors.

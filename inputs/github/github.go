@@ -2,7 +2,6 @@ package github
 
 import (
 	"context"
-	"flashcat.cloud/categraf/types"
 	"fmt"
 	githubLib "github.com/google/go-github/v32/github"
 	"golang.org/x/oauth2"
@@ -14,6 +13,7 @@ import (
 
 	"flashcat.cloud/categraf/config"
 	"flashcat.cloud/categraf/inputs"
+	"flashcat.cloud/categraf/types"
 )
 
 const inputName = "github"

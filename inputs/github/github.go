@@ -16,7 +16,7 @@ import (
 	"flashcat.cloud/categraf/inputs"
 )
 
-const inputName = "jenkins"
+const inputName = "github"
 
 type Github struct {
 	config.PluginConfig
@@ -54,6 +54,9 @@ type Instance struct {
 }
 
 func (ins *Instance) Init() error {
+	if len(ins.Repositories) == 0 { //如果没有设置监听的仓库 就报错
+		return types.ErrInstancesEmpty
+	}
 	return nil
 }
 
@@ -114,6 +117,8 @@ func (ins *Instance) Gather(slist *types.SampleList) {
 			slist.PushSamples(inputName, fields, tags)
 		}(repository, slist)
 	} // end for range ins.Repositories
+
+	wg.Wait() // 这个不能忘记等待，不然提前结束了就没数据 push到 sList 里面了
 
 }
 
